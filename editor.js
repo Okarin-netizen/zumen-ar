@@ -199,7 +199,7 @@
         for (let j = 0; j < hh; j++) for (let i = 0; i < w; i++) s[j * w + i] = cell[(j + j0) * nw + i + i0];
         const [rx, ry] = this.L.regions[v], ppm = K / this.u;
         // 画面でかいた線は正確なので方眼への合わせこみはせず、線の太さ（1px）だけ内側へ
-        out[v] = { s, W: w, H: hh, view: { mask, w: W, h: H, pxPerMm: ppm, x0: rx - pad / ppm, y0: ry - pad / ppm, erodePx: 1, tolMm: 0.6 / ppm, snap: null } };
+        out[v] = { s, W: w, H: hh, view: { mask, w: W, h: H, pxPerMm: ppm, x0: rx - pad / ppm, y0: ry - pad / ppm, erodePx: 1, tolMm: 1.2 / ppm, snap: null } };
       }
       return out;
     }

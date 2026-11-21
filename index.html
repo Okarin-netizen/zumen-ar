@@ -310,6 +310,19 @@ function drawMask(cv, sil) {
   ctx.putImageData(im, 0, 0);
 }
 
+// 立体化に使った輪郭（多角形・円弧）を表示する
+function drawPolys(cv, groups) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const g of groups) for (const [x, y] of g.outer) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  const pad = 0.08 * Math.max(x1 - x0, y1 - y0), sc = 240 / Math.max(x1 - x0 + 2 * pad, y1 - y0 + 2 * pad);
+  cv.width = Math.round((x1 - x0 + 2 * pad) * sc); cv.height = Math.round((y1 - y0 + 2 * pad) * sc);
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#f5f5f5'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.beginPath();
+  const path = p => p.forEach(([x, y], i) => ctx[i ? 'lineTo' : 'moveTo']((x - x0 + pad) * sc, (y - y0 + pad) * sc));
+  for (const g of groups) { path(g.outer); ctx.closePath(); for (const h of g.holes) { path(h); ctx.closePath(); } }
+  ctx.fillStyle = '#282828'; ctx.fill('evenodd');
+}
+
 // ---------- 作図用紙（四隅マーカー付き方眼紙）の読み取り ----------
 // 配置は sheet.js（印刷する用紙と同じ計算）。座標は用紙左上からの mm。
 const PX = 4; // 補正後の画像は A4 基準 1mm = 4px
@@ -585,7 +598,10 @@ async function finish(F, T, S, opt = {}) {
     // 三面の輪郭を押し出して交差させる（斜面・曲面がなめらか）。うまくいかなければブロック（ボクセル）で作る
     let geo = null, solid = null;
     if (opt.views) {
-      try { solid = buildSolid(opt.views); geo = placeForDisplay(solid.geo); }
+      try {
+        solid = buildSolid(opt.views); geo = placeForDisplay(solid.geo);
+        drawPolys($('vFront'), solid.polys.F); drawPolys($('vTop'), solid.polys.T); drawPolys($('vSide'), solid.polys.S);
+      }
       catch (e) { console.warn('CSG failed, falling back to voxels', e); }
     }
     if (!geo) geo = voxelsToGeometry(C);

@@ -32,7 +32,9 @@
     setSegments(views) { this._push(); this.views = { top: [], front: [], side: [], ...views }; this.render(); this.onChange(); }
     clear() { this._push(); this.views = { top: [], front: [], side: [] }; this.render(); this.onChange(); }
     undo() { if (!this.undoStack.length) return; this.views = JSON.parse(this.undoStack.pop()); this.render(); this.onChange(); }
-    setTool(t) { this.tool = t; this.render(); }
+    setTool(t) { this.tool = t; this.arcPending = null; if (t === 'solid' || t === 'hidden') this.lineType = t; this.render(); }
+    get lineType() { return this._lt || 'solid'; }
+    set lineType(v) { this._lt = v; }
     segmentCount() { return VIEWS.reduce((a, v) => a + this.views[v].length, 0); }
     _push() { this.undoStack.push(JSON.stringify(this.views)); if (this.undoStack.length > 100) this.undoStack.shift(); }
 
@@ -52,7 +54,7 @@
     _eraseAt(p) {
       const s = this._snapRaw(p); if (!s) return false;
       const segs = this.views[s.v], before = segs.length;
-      this.views[s.v] = segs.filter(g => distToSeg(s.fi, s.fj, g) > 0.45);
+      this.views[s.v] = segs.filter(g => distToItem(s.fi, s.fj, g) > 0.45);
       return this.views[s.v].length !== before;
     }
     _snapRaw([x, y]) { // 消しゴム用：格子点に丸めない
@@ -64,6 +66,15 @@
       if (!this.L) return; this.cv.setPointerCapture(e.pointerId);
       const p = this._mm(e);
       if (this.tool === 'erase') { this._push(); this.drag = { erase: true, changed: this._eraseAt(p) }; this.render(); return; }
+      if (this.tool === 'arc' && this.arcPending) { // 円弧の3点目（終わりの向き）
+        const q = this._snap(p, this.arcPending.v), A = this.arcPending;
+        if (q && (q.i !== A.c.i || q.j !== A.c.j)) {
+          const a0 = Math.atan2(A.s.j - A.c.j, A.s.i - A.c.i), a1 = Math.atan2(q.j - A.c.j, q.i - A.c.i);
+          let sweep = a1 - a0; while (sweep <= -Math.PI) sweep += 2 * Math.PI; while (sweep > Math.PI) sweep -= 2 * Math.PI;
+          if (Math.abs(sweep) > 1e-6) { this._push(); this.views[A.v].push({ k: 'arc', cx: A.c.i, cy: A.c.j, r: Math.hypot(A.s.i - A.c.i, A.s.j - A.c.j), a0, sweep, t: A.t }); this.onChange(); }
+        }
+        this.arcPending = null; this.render(); return;
+      }
       const a = this._snap(p); if (!a) return;
       this.drag = { a, b: a };
       this.render();
@@ -79,13 +90,18 @@
       const d = this.drag; this.drag = null;
       if (!d) return;
       if (d.erase) { if (!d.changed) this.undoStack.pop(); else this.onChange(); this.render(); return; }
-      const { a, b } = d;
+      const { a, b } = d, t = this.lineType;
+      if ((this.tool === 'circle' || this.tool === 'arc') && (a.i !== b.i || a.j !== b.j)) {
+        if (this.tool === 'circle') { this._push(); this.views[a.v].push({ k: 'circle', cx: a.i, cy: a.j, r: Math.hypot(b.i - a.i, b.j - a.j), t }); this.onChange(); }
+        else this.arcPending = { v: a.v, c: a, s: b, t };
+        this.render(); return;
+      }
       if (a.i !== b.i || a.j !== b.j) {
         this._push();
         const segs = this.views[a.v];
         const same = segs.findIndex(g => (g.x1 === a.i && g.y1 === a.j && g.x2 === b.i && g.y2 === b.j) || (g.x1 === b.i && g.y1 === b.j && g.x2 === a.i && g.y2 === a.j));
         if (same >= 0) segs.splice(same, 1);
-        segs.push({ x1: a.i, y1: a.j, x2: b.i, y2: b.j, t: this.tool === 'hidden' ? 'hidden' : 'solid' });
+        segs.push({ x1: a.i, y1: a.j, x2: b.i, y2: b.j, t });
         this.onChange();
       }
       this.render();
@@ -126,13 +142,25 @@
         for (const g of this.views[v]) {
           ctx.save(); ctx.strokeStyle = '#1d1d1b'; ctx.lineWidth = g.t === 'hidden' ? lw * 0.8 : lw; ctx.lineCap = 'round';
           if (g.t === 'hidden') ctx.setLineDash([1.8 * k, 1.2 * k]);
-          line(ctx, X(x0 + g.x1 * u), Y(y0 + g.y1 * u), X(x0 + g.x2 * u), Y(y0 + g.y2 * u)); ctx.restore();
+          drawItem(ctx, g, X(x0), Y(y0), u * k); ctx.restore();
         }
       }
       if (this.drag && !this.drag.erase) {
         const { a, b } = this.drag, [x0, y0] = R[a.v];
-        ctx.save(); ctx.strokeStyle = '#2f6fde'; ctx.lineWidth = lw; ctx.lineCap = 'round'; if (this.tool === 'hidden') ctx.setLineDash([1.8 * k, 1.2 * k]);
-        line(ctx, X(x0 + a.i * u), Y(y0 + a.j * u), X(x0 + b.i * u), Y(y0 + b.j * u)); ctx.restore();
+        ctx.save(); ctx.strokeStyle = '#2f6fde'; ctx.lineWidth = lw; ctx.lineCap = 'round'; if (this.lineType === 'hidden') ctx.setLineDash([1.8 * k, 1.2 * k]);
+        const r = Math.hypot(b.i - a.i, b.j - a.j);
+        if (this.tool === 'circle') drawItem(ctx, { k: 'circle', cx: a.i, cy: a.j, r }, X(x0), Y(y0), u * k);
+        else line(ctx, X(x0 + a.i * u), Y(y0 + a.j * u), X(x0 + b.i * u), Y(y0 + b.j * u));
+        if (this.tool === 'circle' || this.tool === 'arc') { ctx.fillStyle = '#2f6fde'; ctx.beginPath(); ctx.arc(X(x0 + a.i * u), Y(y0 + a.j * u), 3, 0, 7); ctx.fill(); }
+        ctx.restore();
+      }
+      if (this.arcPending) { // 円弧: 中心と始点が決まったあと、終わりの向きをプレビュー
+        const A = this.arcPending, [x0, y0] = R[A.v], q = this.hover && this.hover.v === A.v ? this.hover : A.s;
+        const a0 = Math.atan2(A.s.j - A.c.j, A.s.i - A.c.i), a1 = Math.atan2(q.j - A.c.j, q.i - A.c.i);
+        let sweep = a1 - a0; while (sweep <= -Math.PI) sweep += 2 * Math.PI; while (sweep > Math.PI) sweep -= 2 * Math.PI;
+        ctx.save(); ctx.strokeStyle = '#2f6fde'; ctx.lineWidth = lw;
+        drawItem(ctx, { k: 'arc', cx: A.c.i, cy: A.c.j, r: Math.hypot(A.s.i - A.c.i, A.s.j - A.c.j), a0, sweep }, X(x0), Y(y0), u * k);
+        ctx.setLineDash([4, 4]); ctx.lineWidth = 1; line(ctx, X(x0 + A.c.i * u), Y(y0 + A.c.j * u), X(x0 + q.i * u), Y(y0 + q.j * u)); ctx.restore();
       }
       if (h) {
         const [x0, y0] = R[h.v]; ctx.fillStyle = this.tool === 'erase' ? 'rgba(224,85,58,.35)' : '#2f6fde';
@@ -140,33 +168,62 @@
       }
     }
 
-    // 各図の線から、輪郭の内側を塗ったシルエット（半マス単位）を作る
+    // 図の線を塗りつぶし用に描き、外側を塗って内側を求める
+    _raster(v, K) {
+      const [nw, nh] = this.size[v], pad = 2, W = nw * K + pad * 2 + 1, H = nh * K + pad * 2 + 1;
+      const c = document.createElement('canvas'); c.width = W; c.height = H;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.strokeStyle = '#000'; x.lineWidth = 2; x.lineCap = 'round';
+      for (const g of this.views[v]) drawItem(x, g, pad, pad, K);
+      const d = x.getImageData(0, 0, W, H).data, on = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) on[i] = d[i * 4] < 128 ? 1 : 0;
+      const outside = new Uint8Array(W * H), st = [0]; outside[0] = 1;
+      while (st.length) { const p = st.pop(), px = p % W;
+        for (const q of [p - 1, p + 1, p - W, p + W]) { if (q < 0 || q >= W * H) continue; if ((q === p - 1 && px === 0) || (q === p + 1 && px === W - 1)) continue; if (!on[q] && !outside[q]) { outside[q] = 1; st.push(q); } } }
+      return { outside, W, H, pad, nw, nh };
+    }
+
+    // 各図の線から、輪郭の内側を塗ったシルエット（半マス単位のセル）と、なめらかな立体用のマスクを作る
     toSilhouettes() {
-      const out = {}, K = 8;
+      const out = {}, K = 16;
       for (const v of VIEWS) {
-        const [nw, nh] = this.size[v], pad = 2, W = nw * K + pad * 2 + 1, H = nh * K + pad * 2 + 1;
-        const c = document.createElement('canvas'); c.width = W; c.height = H;
-        const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, W, H); x.strokeStyle = '#000'; x.lineWidth = 2; x.lineCap = 'round';
-        for (const g of this.views[v]) line(x, pad + g.x1 * K, pad + g.y1 * K, pad + g.x2 * K, pad + g.y2 * K);
-        const d = x.getImageData(0, 0, W, H).data, on = new Uint8Array(W * H);
-        for (let i = 0; i < W * H; i++) on[i] = d[i * 4] < 128 ? 1 : 0;
-        const outside = new Uint8Array(W * H), st = [0]; outside[0] = 1;
-        while (st.length) { const p = st.pop(), px = p % W;
-          for (const q of [p - 1, p + 1, p - W, p + W]) { if (q < 0 || q >= W * H) continue; if ((q === p - 1 && px === 0) || (q === p + 1 && px === W - 1)) continue; if (!on[q] && !outside[q]) { outside[q] = 1; st.push(q); } } }
+        const { outside, W, H, pad, nw, nh } = this._raster(v, K);
         let i0 = nw, j0 = nh, i1 = -1, j1 = -1; const cell = new Uint8Array(nw * nh);
         for (let j = 0; j < nh; j++) for (let i = 0; i < nw; i++) {
           const p = (pad + Math.round((j + 0.5) * K)) * W + pad + Math.round((i + 0.5) * K);
           if (!outside[p]) { cell[j * nw + i] = 1; if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j; }
         }
-        if (i1 < 0) throw new Error(NAMES[v] + 'の輪郭が閉じていません。線がつながっているか確かめてください。');
+        const mask = new Uint8Array(W * H); let any = false; for (let i = 0; i < W * H; i++) if (!outside[i]) { mask[i] = 1; any = true; }
+        if (i1 < 0 && !any) throw new Error(NAMES[v] + 'の輪郭が閉じていません。線がつながっているか確かめてください。');
+        if (i1 < 0) { i0 = j0 = 0; i1 = j1 = 0; }
         const w = i1 - i0 + 1, hh = j1 - j0 + 1, s = new Uint8Array(w * hh);
         for (let j = 0; j < hh; j++) for (let i = 0; i < w; i++) s[j * w + i] = cell[(j + j0) * nw + i + i0];
-        out[v] = { s, W: w, H: hh };
+        const [rx, ry] = this.L.regions[v], ppm = K / this.u;
+        // 画面でかいた線は正確なので方眼への合わせこみはせず、線の太さ（1px）だけ内側へ
+        out[v] = { s, W: w, H: hh, view: { mask, w: W, h: H, pxPerMm: ppm, x0: rx - pad / ppm, y0: ry - pad / ppm, erodePx: 1, tolMm: 0.6 / ppm, snap: null } };
       }
       return out;
     }
   }
 
+  // 線・円・円弧を描く（ox, oy: 図の原点の画面座標、k: 半マスの画面上の長さ）
+  function drawItem(ctx, g, ox, oy, k) {
+    ctx.beginPath();
+    if (g.k === 'circle') ctx.arc(ox + g.cx * k, oy + g.cy * k, g.r * k, 0, Math.PI * 2);
+    else if (g.k === 'arc') ctx.arc(ox + g.cx * k, oy + g.cy * k, g.r * k, g.a0, g.a0 + g.sweep, g.sweep < 0);
+    else { ctx.moveTo(ox + g.x1 * k, oy + g.y1 * k); ctx.lineTo(ox + g.x2 * k, oy + g.y2 * k); }
+    ctx.stroke();
+  }
+  function distToItem(px, py, g) {
+    if (g.k === 'circle') return Math.abs(Math.hypot(px - g.cx, py - g.cy) - g.r);
+    if (g.k === 'arc') {
+      let a = Math.atan2(py - g.cy, px - g.cx) - g.a0; const s = Math.sign(g.sweep) || 1; a *= s;
+      while (a < 0) a += 2 * Math.PI; while (a >= 2 * Math.PI) a -= 2 * Math.PI;
+      if (a <= Math.abs(g.sweep)) return Math.abs(Math.hypot(px - g.cx, py - g.cy) - g.r);
+      const e = (ang) => Math.hypot(px - g.cx - g.r * Math.cos(ang), py - g.cy - g.r * Math.sin(ang));
+      return Math.min(e(g.a0), e(g.a0 + g.sweep));
+    }
+    return distToSeg(px, py, g);
+  }
   function line(ctx, x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
   function distToSeg(px, py, g) {
     const dx = g.x2 - g.x1, dy = g.y2 - g.y1, l2 = dx * dx + dy * dy;

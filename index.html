@@ -46,7 +46,7 @@ label.small{font-size:.85rem;color:var(--muted)}
 input[type=range]{width:160px}
 </style>
 <script type="importmap">
-{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/","three-mesh-bvh":"https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.8/build/index.module.js","three-bvh-csg":"https://cdn.jsdelivr.net/npm/three-bvh-csg@0.0.16/build/index.module.js"}}
 </script>
 <script type="module" src="https://unpkg.com/@google/model-viewer@3.5.0/dist/model-viewer.min.js"></script>
 </head>
@@ -102,10 +102,12 @@ input[type=range]{width:160px}
 
 <section class="card" id="stepEdit">
 <h2>図面を直す・画面でかく</h2>
-<p class="status" style="margin-top:0">読みこんだ図面の線がここに出ます。方眼の点から点へドラッグすると線を引けます。青い点線は投影の補助線で、平面図と正面図の幅、正面図と右側面図の高さをそろえるのに使えます。</p>
+<p class="status" style="margin-top:0">読みこんだ図面の線がここに出ます。方眼の点から点へドラッグすると線を引けます。斜めの線はどの角度でも引けます。円は中心から半径の点までドラッグ、円弧は中心から始めの点までドラッグしてから終わりの点をタップします。青い点線は投影の補助線で、平面図と正面図の幅、正面図と右側面図の高さをそろえるのに使えます。</p>
 <div class="row" id="editTools">
 <button data-tool="solid" class="primary">実線</button>
 <button data-tool="hidden">かくれ線</button>
+<button data-tool="circle">円</button>
+<button data-tool="arc">円弧</button>
 <button data-tool="erase">消しゴム</button>
 <button id="editUndo">元に戻す</button>
 <button id="editClear">白紙にする</button>
@@ -149,6 +151,7 @@ input[type=range]{width:160px}
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { buildSolid, placeForDisplay, viewPolygons } from './solid.js';
 
 const $ = id => document.getElementById(id);
 let srcImg = null, lastGlb = null;
@@ -425,7 +428,25 @@ function readRegion(red, OW, rect, L, thr, name) {
     const x = Math.floor(R0x + (gi0 + i + 0.5) * cell - ax0), y = Math.floor(R0y + (gj0 + j + 0.5) * cell - ay0);
     g[j * n + i] = x >= 0 && y >= 0 && x < sil.W && y < sil.H ? sil.s[y * sil.W + x] : 0;
   }
-  return { s: g, W: n, H: m, box: [R0x + gi0 * cell, R0y + gj0 * cell, n * cell, m * cell], segs };
+  // なめらかな立体用のマスク（実寸 mm に対応づけ）と、方眼に乗らない斜め線・曲線の取りこみ
+  const ppm = PX / s, view = { mask: sil.s, w: sil.W, h: sil.H, pxPerMm: ppm, x0: ax0 / ppm, y0: ay0 / ppm, erodePx: Math.max(1, Math.round(0.3 * ppm)), snap: { u: L.pitch / 2, ox: rect[0], oy: rect[1] } };
+  const free = freeEdges(view, rect, L.pitch / 2);
+  return { s: g, W: n, H: m, box: [R0x + gi0 * cell, R0y + gj0 * cell, n * cell, m * cell], segs: [...segs, ...free], view };
+}
+
+// 輪郭のうち、方眼の点どうしを結ぶ縦・横・45°の線で表せない部分（任意の角度の斜め線や円など）を線分として返す
+function freeEdges(view, rect, u) {
+  const out = [];
+  for (const g of viewPolygons(view)) for (const poly of [g.outer, ...g.holes]) for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const p = [(a[0] - rect[0]) / u, (a[1] - rect[1]) / u], q = [(b[0] - rect[0]) / u, (b[1] - rect[1]) / u];
+    const onNode = v => Math.abs(v[0] - Math.round(v[0])) < 1e-6 && Math.abs(v[1] - Math.round(v[1])) < 1e-6;
+    const dx = q[0] - p[0], dy = q[1] - p[1];
+    if (onNode(p) && onNode(q) && (Math.abs(dx) < 1e-6 || Math.abs(dy) < 1e-6 || Math.abs(Math.abs(dx) - Math.abs(dy)) < 1e-6)) continue;
+    const r = v => Math.round(v * 100) / 100;
+    out.push({ x1: r(p[0]), y1: r(p[1]), x2: r(q[0]), y2: r(q[1]), t: 'solid' });
+  }
+  return out;
 }
 
 // 方眼に沿って引かれた線を拾う（半マスの辺ごとにインクの割合を調べ、まっすぐ続く部分をまとめる）
@@ -506,7 +527,7 @@ function readSheet(img) {
   }
   loadEditor(L, W, segs);
   if (errs.length) throw new Error(errs.join(' ') + ' 下の「図面を直す」で線を足してから立体にできます。');
-  return { W, L, F: res.F, T: res.T, S: res.S, code };
+  return { W, L, F: res.F, T: res.T, S: res.S, code, views: { front: res.F.view, top: res.T.view, side: res.S.view } };
 }
 
 // ---------- 全体の流れ ----------
@@ -518,7 +539,7 @@ async function run() {
     const img = loadToGray(srcImg, 2000);
     const css = getComputedStyle(document.documentElement);
     const sheet = readSheet(img);
-    if (sheet) return await finish(sheet.F, sheet.T, sheet.S, { sheet, unitMm: sheet.L.pitch / 2 });
+    if (sheet) return await finish(sheet.F, sheet.T, sheet.S, { sheet, unitMm: sheet.L.pitch / 2, views: sheet.views });
     const { g, w, h, canvas } = loadToGray(srcImg);
     const ink = adaptiveInk(g, w, h, +$('thr').value);
     const v = findViews(ink, w, h);
@@ -529,7 +550,8 @@ async function run() {
     }
     const F = silhouette(v.front, v.lab, v.dm, w, v.r), T = silhouette(v.top, v.lab, v.dm, w, v.r), S = silhouette(v.side, v.lab, v.dm, w, v.r);
     loadEditorFromSilhouettes(F, T, S);
-    await finish(F, T, S, {});
+    const fv = sil => ({ mask: sil.s, w: sil.W, h: sil.H, pxPerMm: 1, x0: 0, y0: 0, snap: null });
+    await finish(F, T, S, { views: { front: fv(F), top: fv(T), side: fv(S) } });
   } catch (e) {
     ds.textContent = e.message; window.__result = { ok: false, error: e.message };
   }
@@ -560,14 +582,22 @@ async function finish(F, T, S, opt = {}) {
     (opt.statusEl || ds).textContent = head + (warn.length ? '注意: ' + warn.join('、') + '。平均をとって復元します。' : '三面図の寸法はそろっています。');
     const C = carve(F, T, S, unit ? Math.max(F.W, F.H, T.H, S.W) : +$('res').value);
     if (!C.count) throw new Error('三面図から立体を作れませんでした。');
-    const geo = voxelsToGeometry(C);
+    // 三面の輪郭を押し出して交差させる（斜面・曲面がなめらか）。うまくいかなければブロック（ボクセル）で作る
+    let geo = null, solid = null;
+    if (opt.views) {
+      try { solid = buildSolid(opt.views); geo = placeForDisplay(solid.geo); }
+      catch (e) { console.warn('CSG failed, falling back to voxels', e); }
+    }
+    if (!geo) geo = voxelsToGeometry(C);
     lastGlb = await toGlb(geo);
     const mv = $('mv'); if (mv.src) URL.revokeObjectURL(mv.src); mv.src = URL.createObjectURL(lastGlb);
     $('stepModel').hidden = false;
-    if (unit) { const u = unit;
+    const r1 = v => Math.round(v * 10) / 10;
+    if (unit && solid) ms.textContent = `図面上の大きさ: 幅 ${r1(solid.size.x)}mm × 高さ ${r1(solid.size.y)}mm × 奥行き ${r1(solid.size.z)}mm`;
+    else if (unit) { const u = unit;
       ms.textContent = `図面上の大きさ: 幅 ${C.nx * u}mm × 高さ ${C.ny * u}mm × 奥行き ${C.nz * u}mm（${u}mm 単位）`;
     } else ms.textContent = `グリッド ${C.nx}×${C.ny}×${C.nz}、ブロック ${C.count} 個。`;
-    window.__result = { nx: C.nx, ny: C.ny, nz: C.nz, count: C.count, warn, ok: true, sheet: sheet ? { paper: sheet.L.paper, pitch: sheet.L.pitch, code: sheet.code } : null, source: opt.source || 'scan' };
+    window.__result = { nx: C.nx, ny: C.ny, nz: C.nz, count: C.count, warn, ok: true, sheet: sheet ? { paper: sheet.L.paper, pitch: sheet.L.pitch, code: sheet.code } : null, source: opt.source || 'scan', solid: solid ? { x: r1(solid.size.x), y: r1(solid.size.y), z: r1(solid.size.z), volume: Math.round(solid.volume) } : null };
 }
 
 function loadFile(f) { if (!f) return; const img = new Image(); img.onload = () => { srcImg = img; run(); }; img.src = URL.createObjectURL(f); }
@@ -640,7 +670,7 @@ $('editBuild').onclick = async () => {
   const st = $('editStatus');
   try {
     const v = editor.toSilhouettes();
-    await finish(v.front, v.top, v.side, { unitMm: editor.u, label: '編集した図面から立体を作りました。', statusEl: st, source: 'editor' });
+    await finish(v.front, v.top, v.side, { views: { front: v.front.view, top: v.top.view, side: v.side.view }, unitMm: editor.u, label: '編集した図面から立体を作りました。', statusEl: st, source: 'editor' });
     $('stepModel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) { st.textContent = e.message; window.__result = { ok: false, error: e.message, source: 'editor' }; }
 };

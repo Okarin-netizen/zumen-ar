@@ -21,13 +21,46 @@
 
 | ファイル | 内容 |
 | --- | --- |
-| `index.html` | アプリ本体（読み取り、立体化、AR） |
-| `sheet.js` | 作図用紙のレイアウトとSVG生成（読み取りも同じレイアウトを使う） |
-| `editor.js` | 三面図の編集画面 |
-| `solid.js` | 輪郭の多角形化と、押し出し・交差による立体化 |
+| `index.html` | 画面の部品（HTML）と、使うライブラリの版（importmap） |
+| `css/style.css` | 見た目と印刷用の設定 |
+| `src/main.js` | 画面の動き（ボタン・入力と、読み取り → 立体化 → 表示 の流れ） |
+| `src/sheet.js` | 作図用紙のレイアウトとSVG生成（読み取りも同じレイアウトを使う） |
+| `src/sheet-reader.js` | 作図用紙の写真の読み取り（四隅の■で補正、用紙の種類、枠ごとの図） |
+| `src/line-reader.js` | 写真から編集画面用の線（実線・かくれ線・斜め線）を拾う |
+| `src/silhouette.js` | 普通の紙の図面の読み取りと、輪郭の内側を塗ったシルエット |
+| `src/image.js` | 画像処理の基本部品（二値化・膨張・連結成分など） |
+| `src/editor.js` | 三面図の編集画面 |
+| `src/reconstruct.js` | 三面図から立体を作る流れ（寸法チェック → なめらかな立体 → だめならボクセル → GLB） |
+| `src/solid.js` | 輪郭の多角形化と、押し出し・交差による立体化 |
+| `src/voxel.js` | ボクセル彫刻（予備の立体化） |
+| `src/preview.js` | 読み取り結果の表示 |
+| `src/marker-ar.js` | 印刷したマーカーの上に表示するAR（A-Frame + AR.js） |
+| `src/save.js` | 保存（GLB・PNG）と印刷 |
+| `src/sample.js` | 見本の図面 |
+| `tests/smoke.js` | 動作確認（ブラウザを自動で動かして、立体ができるか確かめる） |
 | `ardata/` | ARマーカー（歯車とOKA）とAR.js用データ |
 | `sheets/` | 印刷用PDF（A4・B4・A3 × 5mm・10mm） |
 | `tools/make_marker.py` | ARマーカー画像とパターンファイルの生成 |
+
+## ライブラリ
+
+ビルドはせず、CDN（jsDelivr）から版を固定して読みこみます。版を上げるときは `index.html` の importmap と `src/marker-ar.js` の URL を変え、`tests/smoke.js` で確かめてください。
+
+| ライブラリ | 版 | 使いみち |
+| --- | --- | --- |
+| three.js | 0.187.0 | 立体の計算・GLB書き出し |
+| three-bvh-csg / three-mesh-bvh | 0.0.18 / 0.9.10 | 押し出した形の交差（CSG） |
+| model-viewer | 4.4.0 | 3D表示、iPad/Android のAR |
+| A-Frame / AR.js | 1.7.1 / 3.4.8 | マーカーAR（「マーカーの上に表示」を押したときだけ読みこむ） |
+
+## 動作確認
+
+```
+npm i playwright && npx playwright install chromium
+node tests/smoke.js
+```
+
+見本・編集画面（円柱と斜面）・作図用紙の読み取りで立体ができ、3D表示に出るかを確かめます。
 
 ## 公開
 

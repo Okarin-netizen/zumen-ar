@@ -65,3 +65,7 @@ node tests/smoke.js
 ## 公開
 
 静的ファイルだけなので、GitHub Pages でリポジトリのルートを公開すればそのまま使えます。カメラとARには https のURLが必要です。
+
+## 要求の一覧
+
+この制作物の目的・要求・受入条件・データの扱いは [docs/requirements.md](docs/requirements.md) にまとめています。直す前や、点検で指摘を受けたときは、まずここを更新します。
